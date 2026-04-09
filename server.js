@@ -14,6 +14,11 @@ app.use(express.json({
   }
 }));
 
+// Health check route
+app.get("/", (req, res) => {
+  res.status(200).send("Paystack Kajabi webhook server is running");
+});
+
 // Verify Paystack signature
 function verifyPaystackSignature(req) {
   const secret = process.env.PAYSTACK_SECRET_KEY;
@@ -47,7 +52,7 @@ app.post('/webhook', async (req, res) => {
 
   let courseTag = null;
 
-  // THE MASTERCLASS (first two links)
+  // THE MASTERCLASS
   if (
     referrer.includes("vv9va-2vit") ||
     referrer.includes("simvoafrica") ||
@@ -56,7 +61,7 @@ app.post('/webhook', async (req, res) => {
   ) {
     courseTag = "THE MASTERCLASS Access";
   }
-  // VIBE CODER (last link)
+  // VIBE CODER
   else if (
     referrer.includes("u49leptunf") ||
     domain.includes("u49leptunf")
