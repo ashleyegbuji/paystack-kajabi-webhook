@@ -7,20 +7,26 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Capture raw body (required for Paystack signature verification)
 app.use(express.json({
   verify: (req, res, buf) => {
     req.rawBody = buf.toString();
   }
 }));
 
+// Health check
 app.get("/", (req, res) => {
-  res.status(200).send("Webhook running");
+  res.status(200).send("Paystack webhook server is running");
 });
 
+// Verify Paystack signature
 function verifyPaystackSignature(req) {
   const secret = process.env.PAYSTACK_SECRET_KEY;
 
-  if (!secret) return false;
+  if (!secret) {
+    console.log("Missing PAYSTACK_SECRET_KEY");
+    return false;
+  }
 
   const hash = crypto
     .createHmac('sha512', secret)
@@ -30,31 +36,25 @@ function verifyPaystackSignature(req) {
   return hash === req.headers['x-paystack-signature'];
 }
 
-/* -----------------------------
-   COURSE ROUTING LOGIC (FIXED)
-------------------------------*/
+// COURSE ROUTING (FINAL LOGIC)
 function getCourse(event) {
-  const ref = (event.data.reference || "").toLowerCase();
+  const course = event.data.metadata?.course;
 
-  // MASTERCLASS
-  if (
-    ref.includes("vv9va-2vit") ||
-    ref.includes("simvoafrica")
-  ) {
+  if (course === "masterclass") {
     return "THE MASTERCLASS Access";
   }
 
-  // VIBE CODER
-  if (ref.includes("u49leptunf")) {
+  if (course === "vibe") {
     return "VIBE CODER Access";
   }
 
   return null;
 }
 
+// WEBHOOK
 app.post('/webhook', async (req, res) => {
 
-  // Always respond immediately to prevent Paystack retries
+  // Always respond fast (prevents Paystack retries)
   res.sendStatus(200);
 
   if (!verifyPaystackSignature(req)) {
@@ -64,13 +64,16 @@ app.post('/webhook', async (req, res) => {
 
   const event = req.body;
 
+  console.log("Event received:", event.event);
+
+  // Only handle successful payments
   if (event.event !== "charge.success") return;
 
   const email = event.data.customer.email;
   const courseTag = getCourse(event);
 
   if (!courseTag) {
-    console.log("No matching course for reference:", event.data.reference);
+    console.log("No course found in metadata");
     return;
   }
 
@@ -79,7 +82,7 @@ app.post('/webhook', async (req, res) => {
       "https://app.kajabi.com/api/v1/people",
       {
         person: {
-          email: email,
+          email,
           tags: [courseTag]
         }
       },
@@ -91,7 +94,7 @@ app.post('/webhook', async (req, res) => {
       }
     );
 
-    console.log("Granted access:", email, courseTag);
+    console.log("Access granted:", email, courseTag);
 
   } catch (err) {
     console.log("Kajabi error:", err.response?.data || err.message);
