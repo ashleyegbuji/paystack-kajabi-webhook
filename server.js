@@ -23,34 +23,24 @@ app.get("/", (req, res) => {
 function verifyPaystackSignature(req) {
   const secret = process.env.PAYSTACK_SECRET_KEY;
 
-  if (!secret) {
-    console.log("Missing PAYSTACK_SECRET_KEY");
-    return false;
-  }
+  if (!secret) return false;
 
   const hash = crypto
     .createHmac('sha512', secret)
     .update(req.rawBody)
     .digest('hex');
 
-  const signature = req.headers['x-paystack-signature'];
-
-  return hash === signature;
+  return hash === req.headers['x-paystack-signature'];
 }
 
-// COURSE ROUTING (FINAL FIX)
+// BEST ROUTING LOGIC
 function getCourseTag(event) {
   const reference = (event.data.reference || "").toLowerCase();
 
-  // MASTERCLASS links
-  if (
-    reference.includes("vv9va-2vit") ||
-    reference.includes("simvoafrica")
-  ) {
+  if (reference.includes("vv9va-2vit") || reference.includes("simvoafrica")) {
     return "THE MASTERCLASS Access";
   }
 
-  // VIBE CODER link
   if (reference.includes("u49leptunf")) {
     return "VIBE CODER Access";
   }
@@ -59,10 +49,11 @@ function getCourseTag(event) {
 }
 
 app.post('/webhook', async (req, res) => {
-  try {
-    // ALWAYS respond immediately (prevents Paystack retries & delays)
-    res.sendStatus(200);
 
+  // CRITICAL: respond immediately to Paystack
+  res.sendStatus(200);
+
+  try {
     if (!verifyPaystackSignature(req)) {
       console.log("Invalid signature");
       return;
@@ -70,21 +61,21 @@ app.post('/webhook', async (req, res) => {
 
     const event = req.body;
 
-    console.log("Event received:", event.event);
-
     if (event.event !== "charge.success") return;
 
     const email = event.data.customer.email;
+    const reference = event.data.reference;
+
     const courseTag = getCourseTag(event);
 
     if (!courseTag) {
-      console.log("No matching course for reference:", event.data.reference);
+      console.log("No matching course for reference:", reference);
       return;
     }
 
     console.log("Processing:", email, courseTag);
 
-    // Async Kajabi call (non-blocking)
+    // async Kajabi call (DO NOT block webhook)
     axios.post(
       "https://app.kajabi.com/api/v1/people",
       {
@@ -108,7 +99,7 @@ app.post('/webhook', async (req, res) => {
     });
 
   } catch (err) {
-    console.log("Webhook crash:", err.message);
+    console.log("Webhook error:", err.message);
   }
 });
 
