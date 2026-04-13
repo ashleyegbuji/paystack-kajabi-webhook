@@ -23,14 +23,28 @@ app.get("/", (req, res) => {
 function verifyPaystackSignature(req) {
   const secret = process.env.PAYSTACK_SECRET_KEY;
 
+  if (!secret) {
+    console.log("PAYSTACK_SECRET_KEY is missing from environment variables");
+    return false;
+  }
+
   const hash = crypto.createHmac('sha512', secret)
     .update(req.rawBody)
     .digest('hex');
 
-  return hash === req.headers['x-paystack-signature'];
+  const paystackSignature = req.headers['x-paystack-signature'];
+
+  console.log("Paystack Signature Header:", paystackSignature);
+  console.log("Generated Hash:", hash);
+
+  return hash === paystackSignature;
 }
 
 app.post('/webhook', async (req, res) => {
+  console.log("Webhook endpoint hit!");
+  console.log("Headers:", req.headers);
+  console.log("Body:", JSON.stringify(req.body, null, 2));
+
   if (!verifyPaystackSignature(req)) {
     console.log("Invalid Paystack signature");
     return res.status(400).send('Invalid signature');
@@ -41,6 +55,8 @@ app.post('/webhook', async (req, res) => {
   console.log("Incoming Paystack Event:");
   console.log(JSON.stringify(event, null, 2));
 
+  console.log("Event type received:", event.event);
+
   if (event.event !== 'charge.success') {
     console.log("Ignored event:", event.event);
     return res.sendStatus(200);
@@ -49,6 +65,10 @@ app.post('/webhook', async (req, res) => {
   const email = event.data.customer.email;
   const referrer = event.data.metadata?.referrer || "";
   const domain = event.data.domain || "";
+
+  console.log("Customer Email:", email);
+  console.log("Referrer:", referrer);
+  console.log("Domain:", domain);
 
   let courseTag = null;
 
@@ -69,12 +89,19 @@ app.post('/webhook', async (req, res) => {
     courseTag = "VIBE CODER Access";
   }
   else {
-    console.log("Unknown payment source");
+    console.log("Unknown payment source. No courseTag matched.");
+    return res.sendStatus(200);
+  }
+
+  console.log("Matched Course Tag:", courseTag);
+
+  if (!process.env.KAJABI_API_KEY) {
+    console.log("KAJABI_API_KEY is missing from environment variables");
     return res.sendStatus(200);
   }
 
   try {
-    await axios.post(
+    const response = await axios.post(
       'https://app.kajabi.com/api/v1/people',
       {
         person: {
@@ -90,6 +117,7 @@ app.post('/webhook', async (req, res) => {
       }
     );
 
+    console.log("Kajabi Response Status:", response.status);
     console.log(`Access granted to ${email} for ${courseTag}`);
     res.sendStatus(200);
 
