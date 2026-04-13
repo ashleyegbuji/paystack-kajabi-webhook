@@ -33,28 +33,23 @@ function verifyPaystackSignature(req) {
   return hash === signature;
 }
 
-/**
- * FINAL TAG MAPPING (MATCHES KAJABI EXACT TAGS)
- */
+// Scalable course mapping (BEST PRACTICE)
+const courseMap = {
+  masterclass: "THE MASTERCLASS Access",
+  masterclass_nysc: "THE MASTERCLASS Access",
+  vibe: "VIBE CODER Access",
+  "vibe-coder": "VIBE CODER Access"
+};
+
 function getCourseTag(event) {
   const course = event.data?.metadata?.course;
 
   if (!course) return null;
 
-  const normalized = course.toLowerCase();
-
-  if (normalized === "masterclass") {
-    return "THE MASTERCLASS Access";
-  }
-
-  if (normalized === "vibe" || normalized === "vibe-coder") {
-    return "VIBE CODER Access";
-  }
-
-  return null;
+  return courseMap[course.toLowerCase()] || null;
 }
 
-// Prevent duplicate processing
+// Prevent duplicate processing (simple memory cache)
 const processedPayments = new Set();
 
 function isDuplicate(ref) {
@@ -68,7 +63,7 @@ function markProcessed(ref) {
 // WEBHOOK
 app.post('/webhook', async (req, res) => {
 
-  // Respond immediately to Paystack (IMPORTANT)
+  // Always respond fast to Paystack
   res.sendStatus(200);
 
   if (!verifyPaystackSignature(req)) {
@@ -90,9 +85,9 @@ app.post('/webhook', async (req, res) => {
     return;
   }
 
-  // Prevent duplicates
+  // Prevent duplicate processing
   if (isDuplicate(reference)) {
-    console.log("Duplicate payment ignored:", reference);
+    console.log("Duplicate ignored:", reference);
     return;
   }
 
@@ -105,14 +100,18 @@ app.post('/webhook', async (req, res) => {
     return;
   }
 
-  // IMPORTANT: NO KAJABI API CALL (FIX FOR 405 ERROR)
-  console.log("PAYMENT SUCCESS");
+  // FINAL SUCCESS LOGIC
+  console.log("Payment received");
   console.log("Email:", email);
   console.log("Reference:", reference);
-  console.log("Tag to apply in Kajabi:", courseTag);
+  console.log("Assigning tag:", courseTag);
 
-  console.log("ACTION REQUIRED:");
-  console.log("Kajabi automation will handle access via tag:", courseTag);
+  /**
+   * IMPORTANT:
+   * Kajabi API was removed due to 405 errors.
+   * Use Kajabi automation (tags → access rules) instead.
+   */
+  console.log("Send to Kajabi automation via tag:", courseTag);
 });
 
 app.listen(PORT, () => {
