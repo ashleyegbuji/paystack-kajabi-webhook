@@ -7,7 +7,7 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Capture raw body (required for Paystack signature verification)
+// Capture raw body for Paystack signature verification
 app.use(express.json({
   verify: (req, res, buf) => {
     req.rawBody = buf.toString();
@@ -22,39 +22,56 @@ app.get("/", (req, res) => {
 // Verify Paystack signature
 function verifyPaystackSignature(req) {
   const secret = process.env.PAYSTACK_SECRET_KEY;
+  const signature = req.headers['x-paystack-signature'];
 
-  if (!secret) {
-    console.log("Missing PAYSTACK_SECRET_KEY");
-    return false;
-  }
+  if (!secret || !signature) return false;
 
   const hash = crypto
     .createHmac('sha512', secret)
     .update(req.rawBody)
     .digest('hex');
 
-  return hash === req.headers['x-paystack-signature'];
+  return hash === signature;
 }
 
-// COURSE ROUTING (FINAL LOGIC)
-function getCourse(event) {
-  const course = event.data.metadata?.course;
+/**
+ * FINAL TAG MAPPING (MATCHES YOUR KAJABI TAGS EXACTLY)
+ */
+function getCourseTag(event) {
+  const course = event.data?.metadata?.course;
 
-  if (course === "masterclass") {
+  if (!course) return null;
+
+  const normalized = course.toLowerCase();
+
+  // MASTERCLASS
+  if (normalized === "masterclass") {
     return "THE MASTERCLASS Access";
   }
 
-  if (course === "vibe") {
+  // VIBE CODER
+  if (normalized === "vibe" || normalized === "vibe-coder") {
     return "VIBE CODER Access";
   }
 
   return null;
 }
 
+// Prevent duplicate webhook processing
+const processedPayments = new Set();
+
+function isDuplicate(ref) {
+  return processedPayments.has(ref);
+}
+
+function markProcessed(ref) {
+  processedPayments.add(ref);
+}
+
 // WEBHOOK
 app.post('/webhook', async (req, res) => {
 
-  // Always respond fast (prevents Paystack retries)
+  // Respond immediately to Paystack (VERY IMPORTANT)
   res.sendStatus(200);
 
   if (!verifyPaystackSignature(req)) {
@@ -66,20 +83,36 @@ app.post('/webhook', async (req, res) => {
 
   console.log("Event received:", event.event);
 
-  // Only handle successful payments
   if (event.event !== "charge.success") return;
 
-  const email = event.data.customer.email;
-  const courseTag = getCourse(event);
+  const email = event.data?.customer?.email;
+  const reference = event.data?.reference;
 
-  if (!courseTag) {
-    console.log("No course found in metadata");
+  if (!email || !reference) {
+    console.log("Missing email or reference");
     return;
   }
 
+  // Prevent duplicates
+  if (isDuplicate(reference)) {
+    console.log("Duplicate payment ignored:", reference);
+    return;
+  }
+
+  markProcessed(reference);
+
+  const courseTag = getCourseTag(event);
+
+  if (!courseTag) {
+    console.log("No matching Kajabi tag. Metadata:", event.data?.metadata);
+    return;
+  }
+
+  console.log("Assigning tag:", courseTag, "to", email);
+
   try {
     await axios.post(
-      "https://app.kajabi.com/api/v1/people",
+      "https://kajabi.com/api/v2/people",
       {
         person: {
           email,
@@ -94,7 +127,7 @@ app.post('/webhook', async (req, res) => {
       }
     );
 
-    console.log("Access granted:", email, courseTag);
+    console.log("Access granted successfully:", email, courseTag);
 
   } catch (err) {
     console.log("Kajabi error:", err.response?.data || err.message);
