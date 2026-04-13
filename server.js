@@ -7,16 +7,16 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Use raw body for Paystack signature verification
+// Capture raw body for Paystack signature verification
 app.use(express.json({
   verify: (req, res, buf) => {
     req.rawBody = buf.toString();
   }
 }));
 
-// Health check route
+// Health check
 app.get("/", (req, res) => {
-  res.status(200).send("Paystack Kajabi webhook server is running");
+  res.status(200).send("Webhook server running");
 });
 
 // Verify Paystack signature
@@ -24,106 +24,91 @@ function verifyPaystackSignature(req) {
   const secret = process.env.PAYSTACK_SECRET_KEY;
 
   if (!secret) {
-    console.log("PAYSTACK_SECRET_KEY is missing from environment variables");
+    console.log("Missing PAYSTACK_SECRET_KEY");
     return false;
   }
 
-  const hash = crypto.createHmac('sha512', secret)
+  const hash = crypto
+    .createHmac('sha512', secret)
     .update(req.rawBody)
     .digest('hex');
 
-  const paystackSignature = req.headers['x-paystack-signature'];
+  const signature = req.headers['x-paystack-signature'];
 
-  console.log("Paystack Signature Header:", paystackSignature);
-  console.log("Generated Hash:", hash);
+  return hash === signature;
+}
 
-  return hash === paystackSignature;
+// COURSE ROUTING (FINAL FIX)
+function getCourseTag(event) {
+  const reference = (event.data.reference || "").toLowerCase();
+
+  // MASTERCLASS links
+  if (
+    reference.includes("vv9va-2vit") ||
+    reference.includes("simvoafrica")
+  ) {
+    return "THE MASTERCLASS Access";
+  }
+
+  // VIBE CODER link
+  if (reference.includes("u49leptunf")) {
+    return "VIBE CODER Access";
+  }
+
+  return null;
 }
 
 app.post('/webhook', async (req, res) => {
-  console.log("Webhook endpoint hit!");
-  console.log("Headers:", req.headers);
-  console.log("Body:", JSON.stringify(req.body, null, 2));
-
-  if (!verifyPaystackSignature(req)) {
-    console.log("Invalid Paystack signature");
-    return res.status(400).send('Invalid signature');
-  }
-
-  const event = req.body;
-
-  console.log("Incoming Paystack Event:");
-  console.log(JSON.stringify(event, null, 2));
-
-  console.log("Event type received:", event.event);
-
-  if (event.event !== 'charge.success') {
-    console.log("Ignored event:", event.event);
-    return res.sendStatus(200);
-  }
-
-  const email = event.data.customer.email;
-  const referrer = event.data.metadata?.referrer || "";
-  const domain = event.data.domain || "";
-
-  console.log("Customer Email:", email);
-  console.log("Referrer:", referrer);
-  console.log("Domain:", domain);
-
-  let courseTag = null;
-
-  // THE MASTERCLASS
-  if (
-    referrer.includes("vv9va-2vit") ||
-    referrer.includes("simvoafrica") ||
-    domain.includes("vv9va-2vit") ||
-    domain.includes("simvoafrica")
-  ) {
-    courseTag = "THE MASTERCLASS Access";
-  }
-  // VIBE CODER
-  else if (
-    referrer.includes("u49leptunf") ||
-    domain.includes("u49leptunf")
-  ) {
-    courseTag = "VIBE CODER Access";
-  }
-  else {
-    console.log("Unknown payment source. No courseTag matched.");
-    return res.sendStatus(200);
-  }
-
-  console.log("Matched Course Tag:", courseTag);
-
-  if (!process.env.KAJABI_API_KEY) {
-    console.log("KAJABI_API_KEY is missing from environment variables");
-    return res.sendStatus(200);
-  }
-
   try {
-    const response = await axios.post(
-      'https://app.kajabi.com/api/v1/people',
+    // ALWAYS respond immediately (prevents Paystack retries & delays)
+    res.sendStatus(200);
+
+    if (!verifyPaystackSignature(req)) {
+      console.log("Invalid signature");
+      return;
+    }
+
+    const event = req.body;
+
+    console.log("Event received:", event.event);
+
+    if (event.event !== "charge.success") return;
+
+    const email = event.data.customer.email;
+    const courseTag = getCourseTag(event);
+
+    if (!courseTag) {
+      console.log("No matching course for reference:", event.data.reference);
+      return;
+    }
+
+    console.log("Processing:", email, courseTag);
+
+    // Async Kajabi call (non-blocking)
+    axios.post(
+      "https://app.kajabi.com/api/v1/people",
       {
         person: {
-          email: email,
+          email,
           tags: [courseTag]
         }
       },
       {
         headers: {
           Authorization: `Bearer ${process.env.KAJABI_API_KEY}`,
-          'Content-Type': 'application/json'
+          "Content-Type": "application/json"
         }
       }
-    );
-
-    console.log("Kajabi Response Status:", response.status);
-    console.log(`Access granted to ${email} for ${courseTag}`);
-    res.sendStatus(200);
+    )
+    .then(() => {
+      console.log("Kajabi success:", email);
+    })
+    .catch((err) => {
+      console.log("Kajabi error:", err.response?.data || err.message);
+    });
 
   } catch (err) {
-    console.error("Kajabi API error:", err.response?.data || err.message);
-    res.sendStatus(200);
+    console.log("Webhook crash:", err.message);
   }
 });
 
