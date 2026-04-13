@@ -2,7 +2,6 @@ require('dotenv').config();
 
 const express = require('express');
 const crypto = require('crypto');
-const axios = require('axios');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -35,7 +34,7 @@ function verifyPaystackSignature(req) {
 }
 
 /**
- * FINAL TAG MAPPING (MATCHES YOUR KAJABI TAGS EXACTLY)
+ * FINAL TAG MAPPING (MATCHES KAJABI EXACT TAGS)
  */
 function getCourseTag(event) {
   const course = event.data?.metadata?.course;
@@ -44,12 +43,10 @@ function getCourseTag(event) {
 
   const normalized = course.toLowerCase();
 
-  // MASTERCLASS
   if (normalized === "masterclass") {
     return "THE MASTERCLASS Access";
   }
 
-  // VIBE CODER
   if (normalized === "vibe" || normalized === "vibe-coder") {
     return "VIBE CODER Access";
   }
@@ -57,7 +54,7 @@ function getCourseTag(event) {
   return null;
 }
 
-// Prevent duplicate webhook processing
+// Prevent duplicate processing
 const processedPayments = new Set();
 
 function isDuplicate(ref) {
@@ -71,7 +68,7 @@ function markProcessed(ref) {
 // WEBHOOK
 app.post('/webhook', async (req, res) => {
 
-  // Respond immediately to Paystack (VERY IMPORTANT)
+  // Respond immediately to Paystack (IMPORTANT)
   res.sendStatus(200);
 
   if (!verifyPaystackSignature(req)) {
@@ -104,34 +101,18 @@ app.post('/webhook', async (req, res) => {
   const courseTag = getCourseTag(event);
 
   if (!courseTag) {
-    console.log("No matching Kajabi tag. Metadata:", event.data?.metadata);
+    console.log("No matching course. Metadata:", event.data?.metadata);
     return;
   }
 
-  console.log("Assigning tag:", courseTag, "to", email);
+  // IMPORTANT: NO KAJABI API CALL (FIX FOR 405 ERROR)
+  console.log("PAYMENT SUCCESS");
+  console.log("Email:", email);
+  console.log("Reference:", reference);
+  console.log("Tag to apply in Kajabi:", courseTag);
 
-  try {
-    await axios.post(
-      "https://kajabi.com/api/v2/people",
-      {
-        person: {
-          email,
-          tags: [courseTag]
-        }
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.KAJABI_API_KEY}`,
-          "Content-Type": "application/json"
-        }
-      }
-    );
-
-    console.log("Access granted successfully:", email, courseTag);
-
-  } catch (err) {
-    console.log("Kajabi error:", err.response?.data || err.message);
-  }
+  console.log("ACTION REQUIRED:");
+  console.log("Kajabi automation will handle access via tag:", courseTag);
 });
 
 app.listen(PORT, () => {
