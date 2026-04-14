@@ -1,71 +1,74 @@
-require('dotenv').config();
+require("dotenv").config();
 
-const express = require('express');
-const crypto = require('crypto');
+const express = require("express");
+const crypto = require("crypto");
+const axios = require("axios");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Capture raw body for Paystack signature verification
-app.use(express.json({
-  verify: (req, res, buf) => {
-    req.rawBody = buf.toString();
-  }
-}));
+// Capture raw body (required for Paystack signature verification)
+app.use(
+  express.json({
+    verify: (req, res, buf) => {
+      req.rawBody = buf.toString();
+    },
+  })
+);
 
 // Health check
 app.get("/", (req, res) => {
-  res.status(200).send("Paystack webhook server is running");
+  res.status(200).send("Paystack Kajabi webhook server is running");
 });
 
 // Verify Paystack signature
 function verifyPaystackSignature(req) {
   const secret = process.env.PAYSTACK_SECRET_KEY;
-  const signature = req.headers['x-paystack-signature'];
+  const signature = req.headers["x-paystack-signature"];
 
-  if (!secret || !signature) return false;
+  if (!secret) {
+    console.log("Missing PAYSTACK_SECRET_KEY in env");
+    return false;
+  }
+
+  if (!signature) {
+    console.log("Missing x-paystack-signature header");
+    return false;
+  }
 
   const hash = crypto
-    .createHmac('sha512', secret)
+    .createHmac("sha512", secret)
     .update(req.rawBody)
-    .digest('hex');
+    .digest("hex");
 
   return hash === signature;
 }
 
-// Scalable course mapping (BEST PRACTICE)
-const courseMap = {
-  masterclass: "THE MASTERCLASS Access",
-  masterclass_nysc: "THE MASTERCLASS Access",
-  vibe: "VIBE CODER Access",
-  "vibe-coder": "VIBE CODER Access"
-};
-
+// Map metadata course to Kajabi tag
 function getCourseTag(event) {
   const course = event.data?.metadata?.course;
 
   if (!course) return null;
 
-  return courseMap[course.toLowerCase()] || null;
+  const normalized = course.toLowerCase();
+
+  if (normalized === "masterclass" || normalized === "masterclass_nysc") {
+    return "THE MASTERCLASS Access";
+  }
+
+  if (normalized === "vibe" || normalized === "vibe-coder") {
+    return "VIBE CODER Access";
+  }
+
+  return null;
 }
 
-// Prevent duplicate processing (simple memory cache)
-const processedPayments = new Set();
-
-function isDuplicate(ref) {
-  return processedPayments.has(ref);
-}
-
-function markProcessed(ref) {
-  processedPayments.add(ref);
-}
-
-// WEBHOOK
-app.post('/webhook', async (req, res) => {
-
-  // Always respond fast to Paystack
+// Webhook endpoint
+app.post("/webhook", async (req, res) => {
+  // Respond immediately to Paystack
   res.sendStatus(200);
 
+  // Verify signature
   if (!verifyPaystackSignature(req)) {
     console.log("Invalid Paystack signature");
     return;
@@ -75,43 +78,60 @@ app.post('/webhook', async (req, res) => {
 
   console.log("Event received:", event.event);
 
+  // Only process successful payments
   if (event.event !== "charge.success") return;
 
   const email = event.data?.customer?.email;
   const reference = event.data?.reference;
+  const courseTag = getCourseTag(event);
+
+  console.log("Payment received");
+  console.log("Email:", email);
+  console.log("Reference:", reference);
+  console.log("Metadata:", event.data?.metadata);
 
   if (!email || !reference) {
     console.log("Missing email or reference");
     return;
   }
 
-  // Prevent duplicate processing
-  if (isDuplicate(reference)) {
-    console.log("Duplicate ignored:", reference);
-    return;
-  }
-
-  markProcessed(reference);
-
-  const courseTag = getCourseTag(event);
-
   if (!courseTag) {
-    console.log("No matching course. Metadata:", event.data?.metadata);
+    console.log("No matching courseTag from metadata");
     return;
   }
 
-  // FINAL SUCCESS LOGIC
-  console.log("Payment received");
-  console.log("Email:", email);
-  console.log("Reference:", reference);
-  console.log("Assigning tag:", courseTag);
+  console.log("Assigning Kajabi Tag:", courseTag);
 
-  /**
-   * IMPORTANT:
-   * Kajabi API was removed due to 405 errors.
-   * Use Kajabi automation (tags → access rules) instead.
-   */
-  console.log("Send to Kajabi automation via tag:", courseTag);
+  if (!process.env.KAJABI_API_KEY) {
+    console.log("Missing KAJABI_API_KEY in env");
+    return;
+  }
+
+  try {
+    const response = await axios.post(
+      "https://app.kajabi.com/api/v1/people",
+      {
+        person: {
+          email: email,
+          tags: [courseTag],
+        },
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.KAJABI_API_KEY}`,
+          "Cotnent-Type": "application/json",
+        },
+      }
+    );
+
+    console.log("Kajabi success:", response.status);
+    console.log("Kajabi response:", response.data);
+
+  } catch (err) {
+    console.log("Kajabi FAILED");
+    console.log("Status:", err.response?.status);
+    console.log("Data:", err.response?.data || err.message);
+  }
 });
 
 app.listen(PORT, () => {
