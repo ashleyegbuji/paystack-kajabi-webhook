@@ -1,7 +1,7 @@
 require('dotenv').config();
-
 const express = require('express');
 const crypto = require('crypto');
+const axios = require('axios');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -13,108 +13,79 @@ app.use(express.json({
   }
 }));
 
-// Health check
 app.get("/", (req, res) => {
-  res.status(200).send("Paystack webhook server is running");
+  res.send("Webhook running");
 });
 
 // Verify Paystack signature
-function verifyPaystackSignature(req) {
+function verify(req) {
   const secret = process.env.PAYSTACK_SECRET_KEY;
-  const signature = req.headers['x-paystack-signature'];
+  const sig = req.headers['x-paystack-signature'];
 
-  if (!secret || !signature) return false;
+  if (!secret || !sig) return false;
 
   const hash = crypto
     .createHmac('sha512', secret)
     .update(req.rawBody)
     .digest('hex');
 
-  return hash === signature;
+  return hash === sig;
 }
 
-/**
- * FINAL TAG MAPPING (MATCHES KAJABI EXACT TAGS)
- */
-function getCourseTag(event) {
-  const course = event.data?.metadata?.course;
+// prevent duplicate processing (resets on restart)
+const processed = new Set();
 
-  if (!course) return null;
+app.post("/webhook", async (req, res) => {
 
-  const normalized = course.toLowerCase();
-
-  if (normalized === "masterclass") {
-    return "THE MASTERCLASS Access";
-  }
-
-  if (normalized === "vibe" || normalized === "vibe-coder") {
-    return "VIBE CODER Access";
-  }
-
-  return null;
-}
-
-// Prevent duplicate processing
-const processedPayments = new Set();
-
-function isDuplicate(ref) {
-  return processedPayments.has(ref);
-}
-
-function markProcessed(ref) {
-  processedPayments.add(ref);
-}
-
-// WEBHOOK
-app.post('/webhook', async (req, res) => {
-
-  // Respond immediately to Paystack (IMPORTANT)
+  // Always respond fast to Paystack
   res.sendStatus(200);
 
-  if (!verifyPaystackSignature(req)) {
-    console.log("Invalid Paystack signature");
+  if (!verify(req)) {
+    console.log("Invalid signature");
     return;
   }
 
   const event = req.body;
 
-  console.log("Event received:", event.event);
-
   if (event.event !== "charge.success") return;
 
-  const email = event.data?.customer?.email;
-  const reference = event.data?.reference;
+  const data = event.data;
 
-  if (!email || !reference) {
+  const email = data?.customer?.email;
+  const ref = data?.reference;
+  const metadata = data?.metadata;
+
+  if (!email || !ref) {
     console.log("Missing email or reference");
     return;
   }
 
-  // Prevent duplicates
-  if (isDuplicate(reference)) {
-    console.log("Duplicate payment ignored:", reference);
+  if (processed.has(ref)) {
+    console.log("Duplicate ignored:", ref);
     return;
   }
 
-  markProcessed(reference);
+  processed.add(ref);
 
-  const courseTag = getCourseTag(event);
+  const payload = {
+    email,
+    reference: ref,
+    full_name: metadata?.full_name || "",
+    phone: metadata?.phone || "",
+    course: metadata?.course || ""
+  };
 
-  if (!courseTag) {
-    console.log("No matching course. Metadata:", event.data?.metadata);
-    return;
+  console.log("PAYMENT SUCCESS:", payload);
+
+  // Send to Make.com
+  try {
+    await axios.post(process.env.AUTOMATION_WEBHOOK_URL, payload);
+    console.log("Sent to Make automation successfully");
+  } catch (err) {
+    console.log("Automation failed:", err.response?.data || err.message);
   }
-
-  // IMPORTANT: NO KAJABI API CALL (FIX FOR 405 ERROR)
-  console.log("PAYMENT SUCCESS");
-  console.log("Email:", email);
-  console.log("Reference:", reference);
-  console.log("Tag to apply in Kajabi:", courseTag);
-
-  console.log("ACTION REQUIRED:");
-  console.log("Kajabi automation will handle access via tag:", courseTag);
 });
 
 app.listen(PORT, () => {
-  console.log("Server running on port", PORT);
+  console.log("Server running on", PORT);
 });
