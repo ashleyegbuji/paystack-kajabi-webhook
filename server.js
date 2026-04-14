@@ -7,7 +7,9 @@ const axios = require("axios");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Capture raw body (required for Paystack signature verification)
+/**
+ * Capture raw body for Paystack signature verification
+ */
 app.use(
   express.json({
     verify: (req, res, buf) => {
@@ -16,25 +18,21 @@ app.use(
   })
 );
 
-// Health check
+/**
+ * Health check
+ */
 app.get("/", (req, res) => {
-  res.status(200).send("Paystack Kajabi webhook server is running");
+  res.status(200).send("Paystack → Kajabi webhook running");
 });
 
-// Verify Paystack signature
+/**
+ * Verify Paystack signature
+ */
 function verifyPaystackSignature(req) {
   const secret = process.env.PAYSTACK_SECRET_KEY;
   const signature = req.headers["x-paystack-signature"];
 
-  if (!secret) {
-    console.log("Missing PAYSTACK_SECRET_KEY in env");
-    return false;
-  }
-
-  if (!signature) {
-    console.log("Missing x-paystack-signature header");
-    return false;
-  }
+  if (!secret || !signature) return false;
 
   const hash = crypto
     .createHmac("sha512", secret)
@@ -44,7 +42,9 @@ function verifyPaystackSignature(req) {
   return hash === signature;
 }
 
-// Map metadata course to Kajabi tag
+/**
+ * MAP COURSE → KAJABI TAG
+ */
 function getCourseTag(event) {
   const course = event.data?.metadata?.course;
 
@@ -63,47 +63,49 @@ function getCourseTag(event) {
   return null;
 }
 
-// Webhook endpoint
+/**
+ * WEBHOOK
+ */
 app.post("/webhook", async (req, res) => {
-  // Respond immediately to Paystack
+  // ALWAYS respond fast to Paystack
   res.sendStatus(200);
 
-  // Verify signature
   if (!verifyPaystackSignature(req)) {
-    console.log("Invalid Paystack signature");
+    console.log("❌ Invalid Paystack signature");
     return;
   }
 
   const event = req.body;
 
-  console.log("Event received:", event.event);
+  console.log("====================================");
+  console.log("EVENT:", event.event);
 
-  // Only process successful payments
   if (event.event !== "charge.success") return;
 
   const email = event.data?.customer?.email;
   const reference = event.data?.reference;
-  const courseTag = getCourseTag(event);
+  const metadata = event.data?.metadata;
 
-  console.log("Payment received");
   console.log("Email:", email);
   console.log("Reference:", reference);
-  console.log("Metadata:", event.data?.metadata);
+  console.log("Metadata:", metadata);
 
   if (!email || !reference) {
-    console.log("Missing email or reference");
+    console.log("❌ Missing email or reference");
     return;
   }
+
+  const courseTag = getCourseTag(event);
 
   if (!courseTag) {
-    console.log("No matching courseTag from metadata");
+    console.log("❌ No matching course tag from metadata");
     return;
   }
 
-  console.log("Assigning Kajabi Tag:", courseTag);
+  console.log("🎯 Assigning Kajabi Tag:", courseTag);
 
   if (!process.env.KAJABI_API_KEY) {
-    console.log("Missing KAJABI_API_KEY in env");
+    console.log("❌ Missing KAJABI_API_KEY");
     return;
   }
 
@@ -119,18 +121,20 @@ app.post("/webhook", async (req, res) => {
       {
         headers: {
           Authorization: `Bearer ${process.env.KAJABI_API_KEY}`,
-          "Cotnent-Type": "application/json",
+          "Content-Type": "application/json",
         },
       }
     );
 
-    console.log("Kajabi success:", response.status);
-    console.log("Kajabi response:", response.data);
+    console.log("✅ KAJABI SUCCESS");
+    console.log("Status:", response.status);
+    console.log("Response:", response.data);
 
   } catch (err) {
-    console.log("Kajabi FAILED");
+    console.log("❌ KAJABI FAILED");
     console.log("Status:", err.response?.status);
-    console.log("Data:", err.response?.data || err.message);
+    console.log("Data:", err.response?.data);
+    console.log("Message:", err.message);
   }
 });
 
